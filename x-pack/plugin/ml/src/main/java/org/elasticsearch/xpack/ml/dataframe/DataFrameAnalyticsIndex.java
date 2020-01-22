@@ -22,9 +22,9 @@ import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.cluster.metadata.MappingMetaData;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.collect.ImmutableOpenMap;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.IndexSortConfig;
+import org.elasticsearch.index.mapper.KeywordFieldMapper;
 import org.elasticsearch.search.sort.SortOrder;
 import org.elasticsearch.xpack.core.ClientHelper;
 import org.elasticsearch.xpack.core.ml.dataframe.DataFrameAnalyticsConfig;
@@ -87,7 +87,7 @@ public final class DataFrameAnalyticsIndex {
                                                   ActionListener<CreateIndexRequest> listener) {
         AtomicReference<Settings> settingsHolder = new AtomicReference<>();
 
-        ActionListener<ImmutableOpenMap<String, MappingMetaData>> mappingsListener = ActionListener.wrap(
+        ActionListener<MappingMetaData> mappingsListener = ActionListener.wrap(
             mappings -> listener.onResponse(createIndexRequest(clock, config, settingsHolder.get(), mappings)),
             listener::onFailure
         );
@@ -115,19 +115,15 @@ public final class DataFrameAnalyticsIndex {
     }
 
     private static CreateIndexRequest createIndexRequest(Clock clock, DataFrameAnalyticsConfig config, Settings settings,
-                                                         ImmutableOpenMap<String, MappingMetaData> mappings) {
-        // There should only be 1 type
-        assert mappings.size() == 1;
-
+                                                         MappingMetaData mappings) {
         String destinationIndex = config.getDest().getIndex();
-        String type = mappings.keysIt().next();
-        Map<String, Object> mappingsAsMap = mappings.valuesIt().next().sourceAsMap();
+        Map<String, Object> mappingsAsMap = mappings.sourceAsMap();
         Map<String, Object> properties = getOrPutDefault(mappingsAsMap, PROPERTIES, HashMap::new);
         checkResultsFieldIsNotPresentInProperties(config, properties);
         properties.putAll(createAdditionalMappings(config, Collections.unmodifiableMap(properties)));
         Map<String, Object> metadata = getOrPutDefault(mappingsAsMap, META, HashMap::new);
         metadata.putAll(createMetaData(config.getId(), clock));
-        return new CreateIndexRequest(destinationIndex, settings).mapping(type, mappingsAsMap);
+        return new CreateIndexRequest(destinationIndex, settings).mapping(mappingsAsMap);
     }
 
     private static Settings settings(GetSettingsResponse settingsResponse) {
@@ -162,16 +158,8 @@ public final class DataFrameAnalyticsIndex {
 
     private static Map<String, Object> createAdditionalMappings(DataFrameAnalyticsConfig config, Map<String, Object> mappingsProperties) {
         Map<String, Object> properties = new HashMap<>();
-        properties.put(ID_COPY, Map.of("type", "keyword"));
-        for (Map.Entry<String, String> entry
-                : config.getAnalysis().getExplicitlyMappedFields(config.getDest().getResultsField()).entrySet()) {
-            String destFieldPath = entry.getKey();
-            String sourceFieldPath = entry.getValue();
-            Object sourceFieldMapping = mappingsProperties.get(sourceFieldPath);
-            if (sourceFieldMapping != null) {
-                properties.put(destFieldPath, sourceFieldMapping);
-            }
-        }
+        properties.put(ID_COPY, Map.of("type", KeywordFieldMapper.CONTENT_TYPE));
+        properties.putAll(config.getAnalysis().getExplicitlyMappedFields(mappingsProperties, config.getDest().getResultsField()));
         return properties;
     }
 
@@ -232,4 +220,3 @@ public final class DataFrameAnalyticsIndex {
         }
     }
 }
-
